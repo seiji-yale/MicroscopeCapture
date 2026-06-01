@@ -1,0 +1,6 @@
+@echo off
+REM Copy this file to dropbox_sync.config.bat and set your paths.
+REM dropbox_sync.config.bat is gitignored and never uploaded.
+
+set "SRC=C:\Users\YOUR_USER\Dropbox\YourFolder\MicroscopeCapture"
+set "DST=C:\MicroscopeCapture"
