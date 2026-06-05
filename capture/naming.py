@@ -54,13 +54,18 @@ def ensure_output_dirs(save_dir: Path) -> dict[str, Path]:
     return {"images": images, "videos": videos, "metadata": metadata}
 
 
+def media_path(directory: Path, stem: str, suffix: str) -> Path:
+    """Return the canonical path for stem + suffix (may already exist)."""
+    return directory / f"{stem}{suffix}"
+
+
 def resolve_unique_path(directory: Path, stem: str, suffix: str) -> tuple[Path, bool]:
     """
     Return a non-colliding file path.
 
     If stem.suffix exists, append _001, _002, ... and report collision.
     """
-    candidate = directory / f"{stem}{suffix}"
+    candidate = media_path(directory, stem, suffix)
     if not candidate.exists():
         return candidate, False
 

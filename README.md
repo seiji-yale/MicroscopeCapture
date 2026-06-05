@@ -10,6 +10,8 @@ Lightweight image and video acquisition application for scientific microscopy us
 - Still image capture to PNG
 - Basic uncompressed AVI video recording
 - User-editable filenames with optional Auto-fill template
+- Optional warning before overwriting an existing filename (images and videos)
+- Brief on-preview animation when a capture or recording is saved (no success popup)
 - Metadata JSON sidecar files for each capture
 - Desktop shortcut launcher (no command line needed)
 
@@ -72,6 +74,8 @@ It creates a **Microscope Capture** shortcut on your Desktop that launches the a
 
 ### macOS (development smoke tests only)
 
+Run the app **on the Mac whose screen you are using**, in a **local Terminal** window (Terminal.app or iTerm). Do **not** start it over `ssh` from another computer; macOS will not show the Qt window on the remote machine's display.
+
 ```bash
 cd MicroscopeCapture
 python3 -m venv .venv
@@ -79,6 +83,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 python app.py
 ```
+
+If you see `OpenCV: not authorized to capture video`, open **System Settings → Privacy & Security → Camera** and enable access for **Terminal** (or iTerm). The main window should still appear even before camera access is granted; preview works after you allow the camera.
 
 ## Version Control (Git)
 
@@ -189,6 +195,12 @@ Edit `SRC` to your Dropbox `MicroscopeCapture` folder, then run `update_from_dro
 - When zoomed in, **drag the image** to pan around; the visible region fills the panel.
 - **Reset View** returns to the full frame (1.0x).
 - **Save visible region only** (on by default): captured PNGs contain exactly what is shown. Turn it off to always save the full frame regardless of zoom.
+
+### Save feedback and duplicate filenames
+
+- After a still image or finished video is saved, the live preview shows a short green flash and a fading **Saved** label with the filename. Errors still use a dialog.
+- **Warn when saving over an existing filename** (off by default): when enabled, saving an image or starting a recording with a name that already exists in `Images/` or `Videos/` opens a dialog with **Overwrite**, **Save with new name** (`_001`, …), or **Cancel**. When disabled, new files are renamed automatically as before.
+- The duplicate-warning preference is remembered between sessions (Qt settings).
 
 ## Troubleshooting
 

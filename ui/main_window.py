@@ -8,8 +8,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
+from PySide6.QtCore import QSettings, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -32,6 +32,7 @@ from capture.naming import (
     build_auto_filename,
     build_metadata,
     ensure_output_dirs,
+    media_path,
     resolve_unique_path,
     sanitize_filename,
     validate_save_directory,
@@ -49,6 +50,7 @@ RESOLUTION_PRESETS: list[tuple[str, tuple[int, int] | None]] = [
 
 
 MAX_ZOOM = 8.0
+SETTINGS_WARN_DUPLICATE = "warn_on_duplicate_filename"
 
 
 class PreviewLabel(QLabel):
@@ -74,6 +76,28 @@ class PreviewLabel(QLabel):
         self._cx = 0.5
         self._cy = 0.5
         self._pan_last = None
+        self._flash_strength = 0.0
+        self._feedback_text = ""
+        self._feedback_opacity = 0.0
+        self._feedback_timer = QTimer(self)
+        self._feedback_timer.setInterval(16)
+        self._feedback_timer.timeout.connect(self._tick_save_feedback)
+
+    def show_save_feedback(self, filename: str) -> None:
+        """Brief on-preview animation when a capture is saved (no dialog)."""
+        self._feedback_text = filename
+        self._flash_strength = 1.0
+        self._feedback_opacity = 1.0
+        if not self._feedback_timer.isActive():
+            self._feedback_timer.start()
+
+    def _tick_save_feedback(self) -> None:
+        self._flash_strength = max(0.0, self._flash_strength - 0.07)
+        self._feedback_opacity = max(0.0, self._feedback_opacity - 0.035)
+        if self._flash_strength <= 0.0 and self._feedback_opacity <= 0.0:
+            self._feedback_timer.stop()
+            self._feedback_text = ""
+        self.update()
 
     def set_frame(self, frame: np.ndarray) -> None:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -177,6 +201,26 @@ class PreviewLabel(QLabel):
         if self._zoom > 1.0:
             painter.setPen(QColor("#33ff88"))
             painter.drawText(10, 22, f"{self._zoom:.1f}x  (drag to pan)")
+
+        if self._flash_strength > 0.0 and not self._display_rect.isNull():
+            flash_alpha = int(90 * self._flash_strength)
+            painter.fillRect(self._display_rect, QColor(51, 255, 136, flash_alpha))
+            border_alpha = int(220 * self._flash_strength)
+            painter.setPen(QPen(QColor(51, 255, 136, border_alpha), 4))
+            painter.drawRect(self._display_rect.adjusted(1, 1, -1, -1))
+
+        if self._feedback_opacity > 0.0 and self._feedback_text:
+            alpha = int(255 * self._feedback_opacity)
+            painter.setPen(QColor(255, 255, 255, alpha))
+            font = QFont(self.font())
+            font.setPointSize(max(10, font.pointSize() + 2))
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(
+                12,
+                self.height() - 16,
+                f"Saved  {self._feedback_text}",
+            )
         painter.end()
 
     def _rect_for(self, pixmap: QPixmap | None) -> QRect:
@@ -233,6 +277,9 @@ class MainWindow(QMainWindow):
         self.reset_view_button = QPushButton("Reset View")
         self.save_cropped_checkbox = QCheckBox("Save visible region only")
         self.save_cropped_checkbox.setChecked(True)
+        self.warn_duplicate_checkbox = QCheckBox(
+            "Warn when saving over an existing filename"
+        )
         self.save_dir_input = QLineEdit(str(self._default_save_dir))
         self.browse_button = QPushButton("Browse")
         self.capture_button = QPushButton("Capture Image")
@@ -262,7 +309,9 @@ class MainWindow(QMainWindow):
 
         self._build_layout()
         self._connect_signals()
-        self.refresh_devices()
+        self._load_settings()
+        # Probe cameras after the window is shown (avoids a blank hang on macOS).
+        QTimer.singleShot(0, self.refresh_devices)
 
         self._record_timer = QTimer(self)
         self._record_timer.setInterval(500)
@@ -294,6 +343,10 @@ class MainWindow(QMainWindow):
         crop_row = QHBoxLayout()
         crop_row.addWidget(self.save_cropped_checkbox)
         crop_row.addStretch(1)
+
+        duplicate_row = QHBoxLayout()
+        duplicate_row.addWidget(self.warn_duplicate_checkbox)
+        duplicate_row.addStretch(1)
 
         form = QFormLayout()
         form.addRow("Sample:", self.sample_input)
@@ -335,6 +388,7 @@ class MainWindow(QMainWindow):
         settings_layout.addLayout(resolution_row)
         settings_layout.addLayout(zoom_row)
         settings_layout.addLayout(crop_row)
+        settings_layout.addLayout(duplicate_row)
         settings_layout.addWidget(controls)
         settings_layout.addLayout(button_row)
         settings_layout.addStretch(1)
@@ -355,6 +409,7 @@ class MainWindow(QMainWindow):
         self.reset_view_button.clicked.connect(self.preview.reset_view)
         self.preview.view_changed.connect(self._on_view_changed)
         self.browse_button.clicked.connect(self._browse_save_dir)
+        self.warn_duplicate_checkbox.toggled.connect(self._save_settings)
         self.capture_button.clicked.connect(self.capture_image)
         self.record_button.clicked.connect(self.toggle_recording)
 
@@ -474,6 +529,54 @@ class MainWindow(QMainWindow):
             raise ValueError("Enter a filename before saving.")
         return stem
 
+    def _settings(self) -> QSettings:
+        return QSettings()
+
+    def _load_settings(self) -> None:
+        settings = self._settings()
+        self.warn_duplicate_checkbox.setChecked(
+            settings.value(SETTINGS_WARN_DUPLICATE, False, type=bool)
+        )
+
+    def _save_settings(self, *_args: object) -> None:
+        settings = self._settings()
+        settings.setValue(
+            SETTINGS_WARN_DUPLICATE, self.warn_duplicate_checkbox.isChecked()
+        )
+
+    def _resolve_media_path(
+        self, directory: Path, stem: str, suffix: str, media_kind: str
+    ) -> tuple[Path, bool] | None:
+        """Pick save path; return None if the user cancels a duplicate warning."""
+        candidate = media_path(directory, stem, suffix)
+        if not candidate.exists():
+            return candidate, False
+        if not self.warn_duplicate_checkbox.isChecked():
+            return resolve_unique_path(directory, stem, suffix)
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Microscope Capture")
+        dialog.setText(
+            f'A {media_kind} file named "{candidate.name}" already exists in:\n{directory}'
+        )
+        dialog.setInformativeText("Overwrite the existing file or save under a new name?")
+        overwrite_button = dialog.addButton(
+            "Overwrite", QMessageBox.ButtonRole.DestructiveRole
+        )
+        rename_button = dialog.addButton(
+            "Save with new name", QMessageBox.ButtonRole.AcceptRole
+        )
+        cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(rename_button)
+        dialog.exec()
+        clicked = dialog.clickedButton()
+        if clicked is cancel_button:
+            return None
+        if clicked is overwrite_button:
+            return candidate, False
+        return resolve_unique_path(directory, stem, suffix)
+
     def _metadata_context(self, media_file: str, media_type: str) -> dict:
         return build_metadata(
             timestamp=datetime.now(),
@@ -510,7 +613,11 @@ class MainWindow(QMainWindow):
             validate_save_directory(save_dir)
             dirs = ensure_output_dirs(save_dir)
             stem = self._stem_from_input()
-            image_path, renamed = resolve_unique_path(dirs["images"], stem, ".png")
+            resolved = self._resolve_media_path(dirs["images"], stem, ".png", "image")
+            if resolved is None:
+                self.set_status("Capture cancelled.")
+                return
+            image_path, renamed = resolved
             frame = self._worker.latest_frame()
             if frame is None:
                 raise RuntimeError("No frame available to capture.")
@@ -527,6 +634,7 @@ class MainWindow(QMainWindow):
                 message += " (filename adjusted to avoid overwrite)"
             message += f"; metadata: {meta_path.name}"
             self.set_status(message)
+            self.preview.show_save_feedback(image_path.name)
         except Exception as exc:  # noqa: BLE001
             self._show_error(str(exc))
 
@@ -539,7 +647,11 @@ class MainWindow(QMainWindow):
             validate_save_directory(save_dir)
             dirs = ensure_output_dirs(save_dir)
             stem = self._stem_from_input()
-            video_path, renamed = resolve_unique_path(dirs["videos"], stem, ".avi")
+            resolved = self._resolve_media_path(dirs["videos"], stem, ".avi", "video")
+            if resolved is None:
+                self.set_status("Recording cancelled.")
+                return
+            video_path, renamed = resolved
             self._pending_video_collision = renamed
             self._pending_video_stem = video_path.stem
             self._worker.start_recording(video_path)
@@ -582,6 +694,7 @@ class MainWindow(QMainWindow):
             if getattr(self, "_pending_video_collision", False):
                 message += " (filename adjusted to avoid overwrite)"
             self.set_status(message)
+            self.preview.show_save_feedback(result.path.name)
         except Exception as exc:  # noqa: BLE001
             self._show_error(str(exc))
 
@@ -599,6 +712,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Microscope Capture", message)
 
     def closeEvent(self, event) -> None:  # noqa: ANN001, N802
+        self._save_settings()
         self._worker.close_camera()
         self._worker.wait(2000)
         super().closeEvent(event)

@@ -40,6 +40,11 @@ def _probe_device(index: int) -> bool:
     if not cap.isOpened():
         cap.release()
         return False
+    # On macOS, reading without Camera permission spams the terminal and is slow.
+    # Treat a successfully opened device as present; preview will prompt for access.
+    if sys.platform == "darwin":
+        cap.release()
+        return True
     ok, _ = cap.read()
     cap.release()
     return ok
@@ -62,6 +67,9 @@ def list_capture_devices(max_index: int = 10) -> list[CaptureDevice]:
     On Windows we only probe indices that pygrabber actually reports, which
     avoids opening (and warning about) non-existent device indices.
     """
+    if sys.platform == "darwin":
+        max_index = min(max_index, 2)
+
     names: dict[int, str] = {}
     probe_count = max_index
     if sys.platform == "win32":
