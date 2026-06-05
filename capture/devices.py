@@ -67,8 +67,9 @@ def list_capture_devices(max_index: int = 10) -> list[CaptureDevice]:
     On Windows we only probe indices that pygrabber actually reports, which
     avoids opening (and warning about) non-existent device indices.
     """
+    # MacBook built-in camera is usually index 0 only; probing index 1 can crash OpenCV.
     if sys.platform == "darwin":
-        max_index = min(max_index, 2)
+        max_index = 1
 
     names: dict[int, str] = {}
     probe_count = max_index

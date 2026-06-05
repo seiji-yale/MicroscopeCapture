@@ -41,13 +41,29 @@ from capture.naming import (
 from capture.worker import CaptureWorker, RecordingResult
 
 # Resolution presets: label -> (width, height) or None for camera default.
+# Elgato Cam Link 4K: up to 3840x2160 @ 30 FPS (MJPEG); 1080p up to 60 FPS on device.
+# See https://help.elgato.com/hc/en-us/articles/360028240951
 RESOLUTION_PRESETS: list[tuple[str, tuple[int, int] | None]] = [
     ("Auto (camera default)", None),
+    ("3840 x 2160 (4K)", (3840, 2160)),
     ("1920 x 1080", (1920, 1080)),
     ("1280 x 720", (1280, 720)),
     ("640 x 480", (640, 480)),
 ]
+DEFAULT_RESOLUTION: tuple[int, int] = (1920, 1080)
 
+# Frame-rate presets: label -> FPS or None to skip CAP_PROP_FPS (device default).
+FPS_PRESETS: list[tuple[str, float | None]] = [
+    ("Auto (device default)", None),
+    ("60 FPS", 60.0),
+    ("30 FPS", 30.0),
+    ("24 FPS", 24.0),
+    ("15 FPS", 15.0),
+]
+DEFAULT_FPS: float = 30.0
+
+# Shown in the window title so preview builds are easy to identify after git pull.
+APP_PREVIEW_VERSION = "0.2-preview"
 
 MAX_ZOOM = 8.0
 SETTINGS_WARN_DUPLICATE = "warn_on_duplicate_filename"
@@ -245,7 +261,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Microscope Capture")
+        self.setWindowTitle(f"Microscope Capture ({APP_PREVIEW_VERSION})")
         self.resize(980, 820)
 
         self._worker = CaptureWorker(self)
@@ -262,6 +278,7 @@ class MainWindow(QMainWindow):
         self.preview = PreviewLabel()
         self.camera_combo = QComboBox()
         self.resolution_combo = QComboBox()
+        self.fps_combo = QComboBox()
         self.refresh_button = QPushButton("Refresh")
         self.sample_input = QLineEdit()
         self.id_input = QLineEdit()
@@ -303,9 +320,18 @@ class MainWindow(QMainWindow):
             self.resolution_combo.addItem(label)
         # Default to Full HD when available.
         default_res = next(
-            (i for i, (_, r) in enumerate(RESOLUTION_PRESETS) if r == (1920, 1080)), 0
+            (i for i, (_, r) in enumerate(RESOLUTION_PRESETS) if r == DEFAULT_RESOLUTION),
+            0,
         )
         self.resolution_combo.setCurrentIndex(default_res)
+
+        for label, _ in FPS_PRESETS:
+            self.fps_combo.addItem(label)
+        default_fps = next(
+            (i for i, (_, rate) in enumerate(FPS_PRESETS) if rate == DEFAULT_FPS),
+            0,
+        )
+        self.fps_combo.setCurrentIndex(default_fps)
 
         self._build_layout()
         self._connect_signals()
@@ -332,7 +358,11 @@ class MainWindow(QMainWindow):
         resolution_row = QHBoxLayout()
         resolution_row.addWidget(QLabel("Resolution:"))
         resolution_row.addWidget(self.resolution_combo, stretch=1)
-        resolution_row.addWidget(self.refresh_button)
+
+        fps_row = QHBoxLayout()
+        fps_row.addWidget(QLabel("Frame rate:"))
+        fps_row.addWidget(self.fps_combo, stretch=1)
+        fps_row.addWidget(self.refresh_button)
 
         zoom_row = QHBoxLayout()
         zoom_row.addWidget(QLabel("Zoom:"))
@@ -386,6 +416,7 @@ class MainWindow(QMainWindow):
         )
         settings_layout.addLayout(camera_row)
         settings_layout.addLayout(resolution_row)
+        settings_layout.addLayout(fps_row)
         settings_layout.addLayout(zoom_row)
         settings_layout.addLayout(crop_row)
         settings_layout.addLayout(duplicate_row)
@@ -404,6 +435,7 @@ class MainWindow(QMainWindow):
         self.refresh_button.clicked.connect(self.refresh_devices)
         self.camera_combo.currentIndexChanged.connect(self._on_camera_changed)
         self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
+        self.fps_combo.currentIndexChanged.connect(self._on_fps_changed)
         self.autofill_button.clicked.connect(self._autofill_filename)
         self.zoom_slider.valueChanged.connect(self._on_zoom_slider)
         self.reset_view_button.clicked.connect(self.preview.reset_view)
@@ -433,6 +465,9 @@ class MainWindow(QMainWindow):
     def _selected_resolution(self) -> tuple[int, int] | None:
         return RESOLUTION_PRESETS[self.resolution_combo.currentIndex()][1]
 
+    def _selected_fps(self) -> float | None:
+        return FPS_PRESETS[self.fps_combo.currentIndex()][1]
+
     def refresh_devices(self) -> None:
         current_index = self.camera_combo.currentData()
         self.camera_combo.blockSignals(True)
@@ -459,15 +494,22 @@ class MainWindow(QMainWindow):
             return
         device = next((item for item in self._devices if item.index == index), None)
         self._active_camera_label = device.label if device else str(index)
-        self._worker.open_camera(index, self._selected_resolution())
+        self._worker.open_camera(
+            index, self._selected_resolution(), self._selected_fps()
+        )
         self.set_status(f"Opening camera {self._active_camera_label}...")
 
     def _on_resolution_changed(self, _row: int) -> None:
         if self.camera_combo.currentData() is None:
             return
-        self._worker.set_resolution(self._selected_resolution())
-        label = self.resolution_combo.currentText()
-        self.set_status(f"Requested resolution: {label}")
+        self._worker.set_format(self._selected_resolution(), self._selected_fps())
+        self.set_status(f"Requested resolution: {self.resolution_combo.currentText()}")
+
+    def _on_fps_changed(self, _row: int) -> None:
+        if self.camera_combo.currentData() is None:
+            return
+        self._worker.set_format(self._selected_resolution(), self._selected_fps())
+        self.set_status(f"Requested frame rate: {self.fps_combo.currentText()}")
 
     def _on_zoom_slider(self, value: int) -> None:
         self.preview.set_zoom(value / 10.0)
@@ -711,8 +753,27 @@ class MainWindow(QMainWindow):
         self.set_status(f"Error: {message}")
         QMessageBox.warning(self, "Microscope Capture", message)
 
+    def _shutdown_worker(self) -> None:
+        """Stop the capture thread without releasing the camera from the UI thread."""
+        self.preview._feedback_timer.stop()
+        self._worker.blockSignals(True)
+        for signal, slot in (
+            (self._worker.frame_ready, self.preview.set_frame),
+            (self._worker.error_occurred, self._show_error),
+            (self._worker.camera_opened, self._on_camera_opened),
+            (self._worker.recording_started, self._on_recording_started),
+            (self._worker.recording_stopped, self._on_recording_stopped),
+        ):
+            try:
+                signal.disconnect(slot)
+            except RuntimeError:
+                pass
+        self._worker.close_camera()
+        if not self._worker.wait(5000):
+            self._worker.terminate()
+            self._worker.wait(1000)
+
     def closeEvent(self, event) -> None:  # noqa: ANN001, N802
         self._save_settings()
-        self._worker.close_camera()
-        self._worker.wait(2000)
+        self._shutdown_worker()
         super().closeEvent(event)

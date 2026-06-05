@@ -5,7 +5,8 @@ Lightweight image and video acquisition application for scientific microscopy us
 ## Features
 
 - Live preview from a selectable capture device
-- Selectable capture resolution (default 1920x1080; also 1280x720 / 640x480 / Auto)
+- Selectable capture resolution (up to 3840x2160 for 4K capture cards; default 1920x1080)
+- Selectable frame rate (60 / 30 / 24 / 15 FPS or device default)
 - Digital zoom with drag-to-pan; capture the visible region
 - Still image capture to PNG
 - Basic uncompressed AVI video recording
@@ -75,6 +76,8 @@ It creates a **Microscope Capture** shortcut on your Desktop that launches the a
 ### macOS (development smoke tests only)
 
 Run the app **on the Mac whose screen you are using**, in a **local Terminal** window (Terminal.app or iTerm). Do **not** start it over `ssh` from another computer; macOS will not show the Qt window on the remote machine's display.
+
+After `git pull` on branch `feature/ui-preview`, the window title should include **`(0.2-preview)`** and the settings panel should show **Frame rate** and **3840 x 2160 (4K)**. If not, run `git log -1 --oneline` and confirm you are not on `main` only.
 
 ```bash
 cd MicroscopeCapture
@@ -175,7 +178,7 @@ Edit `SRC` to your Dropbox `MicroscopeCapture` folder, then run `update_from_dro
 1. Connect the Sony a6700 (clean HDMI output) to the UVC capture device.
 2. Launch the app and click **Refresh** if needed.
 3. Select the correct camera from the dropdown.
-4. Choose a **Resolution** (Auto uses the camera default; pick 1920 x 1080 for full HD).
+4. Choose **Resolution** and **Frame rate** (for example **1920 x 1080** at **60 FPS**, or **3840 x 2160** at **30 FPS** with Cam Link 4K).
 5. Enter metadata fields: Sample, ID, Condition, Magnification, Notes.
 6. Enter any filename you want, or click **Auto-fill** for:
    `YYYYMMDD_HHMMSS_SAMPLE_ID_CONDITION_MAGNIFICATION`
@@ -184,10 +187,13 @@ Edit `SRC` to your Dropbox `MicroscopeCapture` folder, then run `update_from_dro
 
 ### Resolution
 
-- The **Resolution** dropdown requests a capture size from the device. It defaults to `1920 x 1080`.
+- The **Resolution** dropdown requests a capture size from the device. It defaults to `1920 x 1080` for a responsive live preview.
+- **`3840 x 2160 (4K)`** targets capture hardware such as the [Elgato Cam Link 4K](https://www.elgato.com/us/en/p/cam-link-4k) (HDMI up to 2160p; [supported modes](https://help.elgato.com/hc/en-us/articles/360028240951-Cam-Link-4K-Supported-Video-Sources) include 4K30 and 1080p60 depending on camera output and hardware revision).
+- Set the **Sony a6700 HDMI output** to match (for example 4K30 or 1080p60). If the camera and dongle disagree, the device may fall back to another mode; the status line shows the actual `width x height @ FPS` after opening the camera.
 - `Auto (camera default)` keeps whatever the device reports.
-- The capture device must support the requested size; if not, the camera falls back to the nearest supported mode, which the status line reports.
-- The app requests the **MJPG** stream format so HDMI/UVC dongles can deliver full resolution at 30 FPS (see Troubleshooting).
+- The app requests the **MJPG** stream format so HDMI/UVC dongles can deliver high resolution within USB bandwidth (see Troubleshooting).
+- **Frame rate:** Choose **60 FPS** for smooth 1080p live view (when the camera HDMI output and capture card support it). Use **30 FPS** for 4K. **Auto** leaves the rate to the device. The status line shows the actual FPS after the camera opens; some combinations fall back if HDMI or USB bandwidth does not allow the requested rate.
+- **4K note:** Live preview at 4K is heavier than 1080p. Use 1080p while aligning the sample, then switch to 4K before capturing stills if the preview becomes choppy.
 
 ### Zoom, Pan, and Crop (live)
 
@@ -204,15 +210,14 @@ Edit `SRC` to your Dropbox `MicroscopeCapture` folder, then run `update_from_dro
 
 ## Troubleshooting
 
-### Preview stutters at Full HD
+### Preview stutters at Full HD or 4K
 
-If the live preview is choppy at 1920 x 1080 even though the status shows 30 FPS:
+If the live preview is choppy even though the status shows 30 FPS:
 
-- The app already requests the **MJPG** format, which is required for most USB HDMI capture dongles to run 1080p at 30 FPS. The raw (YUYV) format exceeds USB 2.0 bandwidth at 1080p, so the device silently drops to a few FPS.
-- If it is still choppy, the **capture device or its USB connection** is the bottleneck:
-  - Plug the dongle directly into a USB 3.0 port (blue), not a hub.
-  - Confirm the dongle is rated for 1080p60 / 1080p30 capture.
-  - Try 1280 x 720 to verify smoothness; if 720p is smooth but 1080p is not, it is a bandwidth/hardware limit, not the app.
+- The app already requests the **MJPG** format, which is required for most USB HDMI capture dongles (including Cam Link 4K) to reach 1080p/4K within USB bandwidth. The raw (YUYV) default often exceeds bandwidth, so the device silently drops to a few FPS.
+- **Cam Link 4K:** Use a **USB 3.x** port directly on the PC (not a hub). For 4K, set the camera HDMI output to **3840x2160** (typically 30 FPS unless your unit supports 4K60 with MJPEG).
+- If 4K is choppy but 1080p is smooth, use **1920 x 1080** for live work and switch to **3840 x 2160** only when capturing stills.
+- Try **1280 x 720** to verify smoothness; if 720p is smooth but 1080p is not, the bottleneck is bandwidth or the USB path, not the app.
 
 ## Output Layout
 
