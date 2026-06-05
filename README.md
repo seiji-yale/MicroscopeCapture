@@ -155,8 +155,28 @@ update_from_git.bat
 Or manually:
 
 ```bat
+git pull origin main
+```
+
+If you see *no tracking information for the current branch*, run once:
+
+```bat
+git branch --set-upstream-to=origin/main main
 git pull
 ```
+
+### Windows troubleshooting
+
+**`python` was not found** during `setup.bat`:
+
+1. Install [Python 3.12+](https://www.python.org/downloads/windows/) or Miniforge.
+2. Check **Add python.exe to PATH** during setup.
+3. Disable the Microsoft Store alias: **Settings → Apps → Advanced app settings → App execution aliases** → turn off **python.exe** and **python3.exe**.
+4. Open a **new** Command Prompt and run `python --version`, then `setup.bat` again.
+
+**`git` is not recognized**: install [Git for Windows](https://git-scm.com/download/win), then open a new Command Prompt.
+
+**`git pull` fails with no upstream**: use `git pull origin main` or the commands above.
 
 If `requirements.txt` changed, run `setup.bat` again. Your `.venv` and capture data are not overwritten by `git pull`.
 
